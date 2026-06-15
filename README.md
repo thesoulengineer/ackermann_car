@@ -8,9 +8,9 @@ simulated in MuJoCo. University robotics project — three-way team split.
 ```
 ackermann_car/
 ├── assets/         # MuJoCo model files: scene XML, meshes, track geometry
-├── controllers/    # MPC solver (CVXPY-based) — teammate A
+├── controllers/    # MPC solver (CVXPY-based) — Jamiu
 ├── docs/           # Diagrams, writeup, figures
-└── sim/            # Simulated world — Katlego (environment owner)
+└── sim/            # Simulated world — Katlego, David
     ├── track.py        # Centerline, boundaries, headings, curvature, arc length
     ├── speed_profile.py # Reference speed derived from curvature
     ├── lap_manager.py  # Lap detection and timing
@@ -22,8 +22,8 @@ ackermann_car/
 | Area | Owner | Modules |
 |------|-------|---------|
 | Environment | Katlego | `sim/track.py`, `sim/speed_profile.py`, `sim/lap_manager.py`, `sim/visualizer.py` |
-| Vehicle dynamics / integrator | Teammate A | `sim/car.py` (TBD) |
-| MPC solver | Teammate B | `controllers/` |
+| Vehicle dynamics / integrator | David | `sim/car.py` (TBD) |
+| MPC solver | Jamiu | `controllers/` |
 
 ## Setup
 
