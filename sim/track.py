@@ -42,7 +42,8 @@ class Track:
         tck                 scipy spline representation (periodic)
     """
 
-    def __init__(self, waypoints, width=10.0, ds=0.1, n_dense=20000):
+    def __init__(self, waypoints, width=10.0, ds=0.1, n_dense=20000,
+                 v_max=3.0, a_lat_max=2.0):
         wp = np.asarray(waypoints, dtype=float)
         if wp.ndim != 2 or wp.shape[1] != 2:
             raise ValueError("waypoints must have shape (K, 2)")
@@ -56,6 +57,17 @@ class Track:
         self.width = float(width)
         self.half_width = self.width / 2.0
         self.ds = float(ds)
+
+        # Speed-profile parameters are environment-owned (the controller owns
+        # only N and dt). v_ref is computed lazily and cached (see `v_ref`).
+        self._speed_kwargs = dict(v_max=v_max, a_lat_max=a_lat_max)
+        self._v_ref = None
+
+        # Runtime-query state: the last matched index lets nearest_index search
+        # a forward window instead of the whole track; the last dt lets
+        # get_boundary_data reproduce the exact horizon get_reference stepped.
+        self._last_index = None
+        self._last_dt = None
 
         # Periodic cubic spline through the waypoints (C2-continuous at the seam).
         tck, _ = splprep([wp[:, 0], wp[:, 1]], s=0.0, per=True, k=3)
@@ -114,6 +126,108 @@ class Track:
         dtheta = float((theta[1] - theta[0] + np.pi) % (2 * np.pi) - np.pi)
         dkappa = float(kappa[1] - kappa[0])
         return {"position": dpos, "heading": dtheta, "curvature": dkappa}
+
+    # ----- runtime interface to the controller (see docs/INTERFACE.md) ---
+    @property
+    def v_ref(self):
+        """Per-sample reference speed (m/s), computed once and cached."""
+        if self._v_ref is None:
+            try:
+                from sim.speed_profile import speed_profile
+            except ImportError:  # running as a script with sim/ on the path
+                from speed_profile import speed_profile
+            self._v_ref = speed_profile(self, **self._speed_kwargs)
+        return self._v_ref
+
+    @property
+    def last_index(self):
+        """Index matched by the most recent get_reference call (None if never)."""
+        return self._last_index
+
+    def nearest_index(self, state, last_index=None, window_m=5.0, back_m=0.0):
+        """Index of the centerline point closest to the car position state[:2].
+
+        With ``last_index`` given, only a forward arc-length window of
+        ``window_m`` (plus an optional ``back_m`` slack) around it is searched,
+        wrapping across the start/finish seam. This stops the match from
+        sliding backwards or jumping to the far branch on self-overlapping
+        sections such as the figure-eight crossing. With ``last_index=None``
+        (first call) the whole track is searched to acquire the position.
+        """
+        px, py = float(state[0]), float(state[1])
+        if last_index is None:
+            d2 = (self.cx - px) ** 2 + (self.cy - py) ** 2
+            return int(np.argmin(d2))
+
+        P = len(self.cx)
+        fwd = max(1, int(round(window_m / self.ds)))
+        back = max(0, int(round(back_m / self.ds)))
+        cand = (last_index + np.arange(-back, fwd + 1)) % P
+        d2 = (self.cx[cand] - px) ** 2 + (self.cy[cand] - py) ** 2
+        return int(cand[np.argmin(d2)])
+
+    def _horizon_indices(self, i0, N, dt):
+        """Indices of the N+1 horizon points, stepping ~v_ref*dt in arc length.
+
+        Deterministic in (i0, N, dt), so get_reference and get_boundary_data
+        produce the same horizon. Steps advance at least one sample so the
+        horizon always moves forward, and wrap across the seam.
+        """
+        v = self.v_ref
+        P = len(self.cx)
+        idxs = np.empty(N + 1, dtype=int)
+        cur = int(i0) % P
+        idxs[0] = cur
+        for n in range(1, N + 1):
+            step = max(1, int(round(v[cur] * dt / self.ds)))
+            cur = (cur + step) % P
+            idxs[n] = cur
+        return idxs
+
+    def get_reference(self, car_state, N, dt, last_index=None):
+        """Reference array (N+1, 4) for the controller: [x, y, v_ref, theta].
+
+        Row 0 is the centerline point nearest the car; each subsequent row
+        steps ~v_ref*dt forward in arc length, so lookahead is a consistent
+        physical distance. The theta column is unwrapped LOCALLY against the
+        car's current heading (car_state[3]): np.unwrap removes ±pi jumps
+        across the horizon, then the whole column is shifted by a multiple of
+        2*pi so row 0 sits within pi of the car heading. Nothing global is
+        stored, so heading never drifts by 2*pi as laps accumulate.
+
+        The matched start index and dt are remembered so get_boundary_data can
+        reproduce the same horizon.
+        """
+        if last_index is None:
+            last_index = self._last_index
+        i0 = self.nearest_index(car_state, last_index)
+        self._last_index = i0
+        self._last_dt = dt
+
+        idxs = self._horizon_indices(i0, N, dt)
+        theta = np.unwrap(self.theta[idxs])
+        if len(car_state) >= 4:
+            car_theta = float(car_state[3])
+            theta = theta - round((theta[0] - car_theta) / (2 * np.pi)) * 2 * np.pi
+
+        return np.column_stack([self.cx[idxs], self.cy[idxs],
+                                self.v_ref[idxs], theta])
+
+    def get_boundary_data(self, index, N, dt=None):
+        """Left-pointing unit normals (N+1, 2) over the horizon, and half_width.
+
+        Uses the same stepping as get_reference, so the normals align row-for-row
+        with the reference points for the controller's wall constraints. ``dt``
+        defaults to the dt of the most recent get_reference call; pass it
+        explicitly if calling standalone.
+        """
+        if dt is None:
+            dt = self._last_dt
+        if dt is None:
+            raise ValueError(
+                "no dt available: call get_reference first or pass dt explicitly")
+        idxs = self._horizon_indices(index, N, dt)
+        return self.normals[idxs], self.half_width
 
     # ----- built-in presets ---------------------------------------------
     @classmethod
@@ -213,6 +327,37 @@ if __name__ == "__main__":
 
     for name, trk in presets:
         _print_stats(name, trk)
+
+    # ----- runtime reference test: fake car on the oval, near the heading
+    # wrap point (where atan2 flips +/-pi), so the heading column would jump
+    # without local unwrapping.
+    oval = Track.oval()
+    jw = int(np.argmax(np.abs(oval.theta)))      # sample where theta ~ +/-pi
+    j = (jw - 12) % len(oval.cx)                  # start a little before it
+    car_theta = float(oval.theta[j])
+    car_state = np.array([
+        oval.cx[j] + 0.3 * oval.normals[j, 0],   # nudge off the centerline
+        oval.cy[j] + 0.3 * oval.normals[j, 1],
+        2.0,                                      # speed (unused by lookup)
+        car_theta,
+    ])
+
+    N, dt = 25, 0.2
+    ref = oval.get_reference(car_state, N, dt)
+    normals, half_width = oval.get_boundary_data(oval.last_index, N)
+    wrapped = (ref[:, 3] + np.pi) % (2 * np.pi) - np.pi  # what raw atan2 would give
+
+    print("=== get_reference test (oval, crossing the heading wrap) ===")
+    print(f"  car heading        : {car_theta:+.3f} rad")
+    print(f"  reference shape     : {ref.shape}   (expected ({N + 1}, 4))")
+    print(f"  boundary normals    : {normals.shape}, half_width = {half_width:.2f} m")
+    print(f"  heading column (rad):")
+    print("   ", np.array2string(ref[:, 3], precision=3, separator=", "))
+    print(f"  max |d.heading| raw wrapped (no unwrap): "
+          f"{np.abs(np.diff(wrapped)).max():.3f} rad")
+    print(f"  max |d.heading| ours (local unwrap)    : "
+          f"{np.abs(np.diff(ref[:, 3])).max():.3f} rad")
+    print()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     for ax, (name, trk) in zip(axes, presets):
