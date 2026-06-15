@@ -11,9 +11,12 @@ profile. Dynamic overlays (car pose, reference horizon, telemetry) come later.
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from matplotlib.animation import FuncAnimation
 
 
 def _closed(arr):
@@ -96,33 +99,153 @@ def draw_track(track, ax=None, title=None, speed=None,
     return ax
 
 
+class LiveView:
+    """Animated live view of the running simulation over a static track.
+
+    The static track (band, boundaries, centerline) is drawn once as the
+    backdrop. Each frame updates the car pose (a marker plus a heading line),
+    its trailing path, an optional MPC prediction horizon, and a HUD showing
+    lap, lap time, and speed.
+
+    Wire it into an integration loop in either of two ways:
+
+    * call ``update(car_state, horizon, lap_info)`` yourself each step, or
+    * pass an iterable of ``(car_state, horizon, lap_info)`` frames to
+      ``animate(...)`` and let matplotlib's FuncAnimation drive it.
+
+    ``car_state`` is the [x, y, v, theta] state vector (see docs/INTERFACE.md);
+    ``horizon`` is an optional (N+1, 2) array of predicted positions (None to
+    hide it); ``lap_info`` is an optional dict with ``lap`` and ``lap_time``.
+    """
+
+    def __init__(self, track, trail_maxlen=2000, heading_len=None, figsize=(9, 7)):
+        self.track = track
+        self.fig, self.ax = plt.subplots(figsize=figsize)
+        draw_track(track, ax=self.ax)  # static backdrop
+
+        extent = max(np.ptp(track.cx), np.ptp(track.cy))
+        self.heading_len = heading_len or max(2.0 * track.half_width, 0.03 * extent)
+        self._trail = deque(maxlen=trail_maxlen)
+        self._anim = None
+
+        # Animated artists (drawn on top of the static backdrop).
+        (self.trail_ln,) = self.ax.plot([], [], "-", color="tab:blue", lw=1.5,
+                                        alpha=0.7, zorder=4, label="path")
+        (self.horizon_ln,) = self.ax.plot([], [], "-o", color="tab:orange",
+                                          ms=3, lw=1.5, zorder=6, label="MPC horizon")
+        (self.car_pt,) = self.ax.plot([], [], "o", color="crimson", ms=11, zorder=8)
+        (self.heading_ln,) = self.ax.plot([], [], "-", color="crimson", lw=2.5,
+                                          zorder=8)
+        self.hud = self.ax.text(
+            0.02, 0.98, "", transform=self.ax.transAxes, va="top", ha="left",
+            fontsize=10, family="monospace", zorder=10,
+            bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
+
+        self.ax.legend(loc="upper right", fontsize=8)
+        self._artists = [self.trail_ln, self.horizon_ln, self.car_pt,
+                         self.heading_ln, self.hud]
+
+    def reset(self):
+        """Clear the trailing path (e.g. before starting a new run)."""
+        self._trail.clear()
+
+    def init_artists(self):
+        """FuncAnimation init_func: blank every animated artist."""
+        self.trail_ln.set_data([], [])
+        self.horizon_ln.set_data([], [])
+        self.car_pt.set_data([], [])
+        self.heading_ln.set_data([], [])
+        self.hud.set_text("")
+        return self._artists
+
+    def update(self, car_state, horizon=None, lap_info=None):
+        """Update all animated artists for one frame; returns them (for blit)."""
+        cs = np.asarray(car_state, dtype=float)
+        x, y = float(cs[0]), float(cs[1])
+        speed = float(cs[2]) if cs.shape[0] >= 3 else float("nan")
+        theta = float(cs[3]) if cs.shape[0] >= 4 else 0.0
+
+        self.car_pt.set_data([x], [y])
+        self.heading_ln.set_data([x, x + self.heading_len * np.cos(theta)],
+                                 [y, y + self.heading_len * np.sin(theta)])
+
+        self._trail.append((x, y))
+        tx, ty = zip(*self._trail)
+        self.trail_ln.set_data(tx, ty)
+
+        if horizon is not None and len(horizon) > 0:
+            h = np.asarray(horizon, dtype=float)
+            self.horizon_ln.set_data(h[:, 0], h[:, 1])
+        else:
+            self.horizon_ln.set_data([], [])
+
+        self.hud.set_text(self._hud_text(lap_info, speed))
+        return self._artists
+
+    @staticmethod
+    def _hud_text(lap_info, speed):
+        info = lap_info or {}
+        lap = info.get("lap", "-")
+        lap_time = info.get("lap_time", float("nan"))
+        return (f"lap   : {lap}\n"
+                f"time  : {lap_time:6.2f} s\n"
+                f"speed : {speed:5.2f} m/s")
+
+    def _on_frame(self, frame):
+        car_state, horizon, lap_info = frame
+        return self.update(car_state, horizon, lap_info)
+
+    def animate(self, frames, interval=30, blit=True, repeat=False):
+        """Drive the view from an iterable of (car_state, horizon, lap_info).
+
+        Returns the FuncAnimation (also kept on the instance so it is not
+        garbage-collected before plt.show()).
+        """
+        self.reset()
+        self._anim = FuncAnimation(
+            self.fig, self._on_frame, frames=frames, init_func=self.init_artists,
+            interval=interval, blit=blit, repeat=repeat, cache_frame_data=False)
+        return self._anim
+
+
+def _centerline_drive(track, dt=0.1, n_laps=2, N=15):
+    """Fake telemetry: a car following the centerline at the reference speed.
+
+    Yields (car_state, horizon, lap_info) frames. The "predicted horizon" is a
+    stand-in built from the track's own reference lookup (no real controller
+    yet), which is exactly the (N+1, 2) shape LiveView expects.
+    """
+    v = track.v_ref
+    P = len(track.cx)
+    i = 0
+    sim_t = 0.0
+    lap = 1
+    lap_t0 = 0.0
+    laps_done = 0
+    while laps_done < n_laps:
+        state = np.array([track.cx[i], track.cy[i], v[i], track.theta[i]])
+        horizon = track.get_reference(state, N, dt)[:, :2]
+        yield state, horizon, {"lap": lap, "lap_time": sim_t - lap_t0}
+
+        step = max(1, int(round(v[i] * dt / track.ds)))
+        nxt = (i + step) % P
+        sim_t += dt
+        if nxt < i:  # wrapped past the start/finish seam -> lap complete
+            laps_done += 1
+            lap += 1
+            lap_t0 = sim_t
+        i = nxt
+
+
 if __name__ == "__main__":
     try:
         from sim.track import Track
-        from sim.speed_profile import speed_profile
     except ImportError:  # run directly as `python sim/visualizer.py`
         from track import Track
-        from speed_profile import speed_profile
 
-    presets = [
-        ("Oval", Track.oval()),
-        ("Circuit", Track.circuit()),
-        ("Figure-eight", Track.figure_eight()),
-    ]
-
-    # Static layouts.
-    for name, trk in presets:
-        fig, ax = plt.subplots(figsize=(8, 7))
-        draw_track(trk, ax=ax, title=f"{name} track")
-        fig.tight_layout()
-
-    # Oval coloured by its reference speed. The 3 m/s default would clamp this
-    # gently-curved oval flat, so the demo raises v_max to make the curvature
-    # dependence visible: slower into the tight ends, faster on the gentle ones.
     oval = Track.oval()
-    v_ref = speed_profile(oval, v_max=8.0, a_lat_max=2.0)
-    fig, ax = plt.subplots(figsize=(9, 7))
-    draw_track(oval, ax=ax, title="Oval — reference speed profile", speed=v_ref)
-    fig.tight_layout()
-
+    view = LiveView(oval)
+    view.ax.set_title("Live view demo — fake car on the oval centerline")
+    # Keep a reference to the animation so it is not garbage-collected.
+    anim = view.animate(_centerline_drive(oval, dt=0.1, n_laps=2, N=15), interval=20)
     plt.show()
