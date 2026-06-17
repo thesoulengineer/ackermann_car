@@ -1,6 +1,0 @@
-numpy
-scipy
-matplotlib
-mujoco
-cvxpy
-osqp
