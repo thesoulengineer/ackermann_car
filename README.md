@@ -1,7 +1,7 @@
 # ackermann_car
 
 MPC path-tracking controller for an Ackermann-steering car on a racetrack,
-simulated in MuJoCo. University robotics project — three-way team split.
+simulated in MuJoCo. 
 
 ## Repository layout
 
