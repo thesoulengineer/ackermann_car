@@ -25,10 +25,13 @@ Dependencies:
 
 from __future__ import annotations
 
+import logging
 import warnings
 import numpy as np
 import cvxpy as cp
+from controllers.base_controller import BaseController
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Physical / model constants
@@ -76,8 +79,14 @@ RD_DIAG = np.array([0.05, 0.1])
 # from the track boundary.
 WALL_MARGIN = 0.05
 
+# Maximum position error (metres) to clamp e_0 so the QP remains feasible
+# when the car has drifted far off-track.
+E0_CLIP_POS = 4.0   # clip x,y error to ±4 m
+E0_CLIP_VEL = 2.0   # clip v error to ±2 m/s
+E0_CLIP_ANG = 1.0   # clip theta error to ±1 rad
 
-class MPCController:
+
+class MPCController(BaseController):
     """
     Receding-horizon MPC for the Ackermann car.
 
@@ -86,7 +95,7 @@ class MPCController:
     Construct once before the simulation loop, then call at every step:
 
         mpc = MPCController(N=15, dt=0.1)
-        command, horizon = mpc.solve(ref, boundary_normals, half_width)
+        action, horizon = mpc.solve_control(state, ref, boundary_normals, half_width)
 
     The controller owns N and dt (it passes them to get_reference), matching
     the interface contract in INTERFACE.md §4.
@@ -101,6 +110,11 @@ class MPCController:
     The CVXPY problem is built once in __init__ and parameters are updated at
     each call to solve().  This avoids the overhead of re-constructing the
     problem every step (CVXPY compilation is slow; solving is fast).
+
+    KEY DESIGN: e_0 (initial error state) is a CVXPY Parameter filled with
+    the actual measured state error at each step.  This closes the feedback
+    loop so the MPC corrects real deviations instead of assuming the car is
+    always perfectly on the reference.
     """
 
     def __init__(self, N: int = 15, dt: float = 0.1):
@@ -115,14 +129,18 @@ class MPCController:
 
         # Warm-start storage: previous solution shifted by one step.
         # Initialised to zeros; updated after each successful solve.
-        self._u_prev: np.ndarray = np.zeros((N, 2))   # [[a_0, δ_0], …]
-        self._u_last_applied: np.ndarray = np.zeros(2) # [a, δ] from last step
+        self._u_prev: np.ndarray = np.zeros((N, 2))    # [[a_0, δ_0], …]
+        self._u_last_applied: np.ndarray = np.zeros(2)  # [a, δ] from last step
+
+        # Maximum number of obstacles supported simultaneously in the horizon
+        self.M_max = 3
 
         # Build the CVXPY problem (once).
         self._build_problem()
+        logger.info(f"MPCController ready (N={N}, dt={dt}, L={WHEELBASE} m)")
 
     # -----------------------------------------------------------------------
-    # Public API
+    # Public API — legacy interface (teammate compatibility)
     # -----------------------------------------------------------------------
 
     def solve(
@@ -149,38 +167,18 @@ class MPCController:
         predicted_horizon: (N+1, 2)  predicted [x, y] positions over the horizon
                                      (for the LiveView MPC overlay).
         """
-        ref = np.asarray(ref, dtype=float)   # ensure numpy
+        ref = np.asarray(ref, dtype=float)
 
-        # ------------------------------------------------------------------
-        # Step 1: build the linearised A_k, B_k matrices along the reference.
-        # See §2 of MPC_FORMULATION.md.
-        # ------------------------------------------------------------------
+        # Use e_0=0 for legacy callers (assumes car is at reference)
+        state_at_ref = ref[0].copy()
         A_list, B_list = self._linearise_along_ref(ref)
-
-        # ------------------------------------------------------------------
-        # Step 2: load all CVXPY parameters for this solve.
-        # ------------------------------------------------------------------
-        self._load_parameters(ref, A_list, B_list, boundary_normals, half_width)
-
-        # ------------------------------------------------------------------
-        # Step 3: warm-start with the shifted previous solution.
-        # ------------------------------------------------------------------
+        self._load_parameters(state_at_ref, ref, A_list, B_list,
+                              boundary_normals, half_width, obstacles=None)
         self._warm_start()
 
-        # ------------------------------------------------------------------
-        # Step 4: solve.
-        # ------------------------------------------------------------------
         try:
-            self._problem.solve(
-                solver=cp.OSQP,
-                warm_start=True,
-                verbose=False,
-                # OSQP settings: tolerance and iteration budget.
-                eps_abs=1e-4,
-                eps_rel=1e-4,
-                max_iter=4000,
-                polish=True,           # extra accuracy on convergence
-            )
+            self._problem.solve(solver=cp.OSQP, warm_start=True, verbose=False,
+                                eps_abs=1e-4, eps_rel=1e-4, max_iter=4000, polish=True)
         except cp.SolverError as exc:
             warnings.warn(f"[MPCController] Solver error: {exc}. Falling back.")
             return self._fallback(ref)
@@ -190,28 +188,91 @@ class MPCController:
             warnings.warn(f"[MPCController] Solver status: {status}. Falling back.")
             return self._fallback(ref)
 
-        # ------------------------------------------------------------------
-        # Step 5: extract results and update warm-start cache.
-        # ------------------------------------------------------------------
-        u_opt = self._u_var.value          # (N, 2)  [[a_0, δ_0], …]
-        e_opt = self._e_var.value          # (N+1, 4) error states
-
+        u_opt = self._u_var.value
+        e_opt = self._e_var.value
         if u_opt is None or e_opt is None:
             return self._fallback(ref)
 
-        # Save shifted solution for warm-start on the next call.
         self._u_prev = np.vstack([u_opt[1:], u_opt[-1:]])
         self._u_last_applied = u_opt[0]
 
-        # Recover predicted absolute positions: p_ref + e_pos
-        predicted_xy = ref[:, :2] + e_opt[:, :2]   # (N+1, 2)
-
-        # The command is the predicted state at step 1 (after applying u_0).
-        # This matches the mpc_placeholder convention that run.py expects.
-        command = predicted_xy[1, 0], predicted_xy[1, 1], ref[1, 2], ref[1, 3]
-        command = np.array(command, dtype=float)
-
+        predicted_xy = ref[:, :2] + e_opt[:, :2]
+        command = np.array([predicted_xy[1, 0], predicted_xy[1, 1],
+                            ref[1, 2], ref[1, 3]], dtype=float)
         return command, predicted_xy
+
+    # -----------------------------------------------------------------------
+    # Public API — decoupled ZMQ interface (state-feedback MPC)
+    # -----------------------------------------------------------------------
+
+    def solve_control(
+        self,
+        state: np.ndarray,
+        ref: np.ndarray,
+        boundary_normals: np.ndarray,
+        half_width: float,
+        obstacles: list[dict] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Solve the MPC problem for one timestep and return the control action [a, delta].
+
+        This is the primary interface for decoupled execution over ZeroMQ.
+        Unlike the legacy ``solve`` method, this properly closes the feedback loop
+        by computing the initial error state e_0 = state − ref[0].
+
+        Parameters
+        ----------
+        state            : (4,)      actual measured vehicle state [x, y, v, theta]
+        ref              : (N+1, 4)  reference trajectory from Track.get_reference
+        boundary_normals : (M, 2)    unit normals from Track.get_boundary_data
+        half_width       : float     track half-width in metres
+        obstacles        : list of dicts (unused in CVXPY; used for logging)
+
+        Returns
+        -------
+        action           : (2,)      [a, delta] — optimal acceleration and steering angle.
+        predicted_horizon: (N+1, 2)  predicted [x, y] positions over the horizon.
+        """
+        ref = np.asarray(ref, dtype=float)
+        state = np.asarray(state, dtype=float)
+
+        # Step 1: linearise dynamics along the reference trajectory
+        A_list, B_list = self._linearise_along_ref(ref)
+
+        # Step 2: load all CVXPY parameters — including actual e_0
+        self._load_parameters(state, ref, A_list, B_list, boundary_normals, half_width, obstacles=obstacles)
+
+        # Step 3: warm-start the solver
+        self._warm_start()
+
+        # Step 4: solve the QP
+        try:
+            self._problem.solve(solver=cp.OSQP, warm_start=True, verbose=False,
+                                eps_abs=1e-4, eps_rel=1e-4, max_iter=4000, polish=True)
+        except cp.SolverError as exc:
+            warnings.warn(f"[MPCController] Solver error: {exc}. Falling back.")
+            return self._fallback_control(ref)
+
+        status = self._problem.status
+        if status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+            warnings.warn(f"[MPCController] Solver status '{status}'. Falling back.")
+            return self._fallback_control(ref)
+
+        # Step 5: extract and return results
+        u_opt = self._u_var.value
+        e_opt = self._e_var.value
+        if u_opt is None or e_opt is None:
+            return self._fallback_control(ref)
+
+        # Update warm-start cache (shift solution one step forward)
+        self._u_prev = np.vstack([u_opt[1:], u_opt[-1:]])
+        self._u_last_applied = u_opt[0]
+
+        # Absolute predicted positions = reference + error correction
+        predicted_xy = ref[:, :2] + e_opt[:, :2]   # (N+1, 2)
+        action = u_opt[0]                            # [a, delta] — first optimal input
+
+        return action, predicted_xy
 
     # -----------------------------------------------------------------------
     # CVXPY problem construction (called once in __init__)
@@ -228,6 +289,7 @@ class MPCController:
 
         Parameters (values injected at each solve)
         ------------------------------------------
+        e0_par  (4,)      ACTUAL initial error state (closes the feedback loop)
         A_par  (N, 4, 4)  linearised state-transition Jacobians
         B_par  (N, 4, 2)  linearised input Jacobians
         n_par  (N, 2)     boundary normals (one per horizon step)
@@ -241,6 +303,11 @@ class MPCController:
         self._u_var = cp.Variable((N,     2), name="u")   # control inputs
 
         # --- Parameters (filled in _load_parameters at each solve) ---
+
+        # Initial error state — set to actual (state - ref[0]) each step.
+        # This is the key parameter that closes the feedback loop.
+        self._e0_par = cp.Parameter(4, name="e0")
+
         # Linearisation matrices (one per step along the horizon).
         self._A_par = cp.Parameter((N * 4, 4), name="A")  # packed: row i*4:(i+1)*4
         self._B_par = cp.Parameter((N * 4, 2), name="B")  # same packing
@@ -252,14 +319,20 @@ class MPCController:
         # Previous input (for Δu constraint at the first step).
         self._u_prev_par = cp.Parameter(2, name="u_prev")
 
+        # Linear parameters for obstacle avoidance
+        self._obs_A_par = cp.Parameter((N * self.M_max, 2), name="obs_A")
+        self._obs_b_par = cp.Parameter(N * self.M_max, name="obs_b")
+
+        # Slack variables for soft obstacle constraints
+        self._obs_slack = cp.Variable(N * self.M_max, nonneg=True, name="obs_slack")
+
         # --- Build cost and constraints ---
         cost        = 0
         constraints = []
 
-        # Initial error state is zero: we are expanding around the reference,
-        # so the current measured state equals the reference at k=0.
-        # (In a real deployment you would set e_0 = x_measured − x_ref_0.)
-        constraints += [self._e_var[0] == 0]
+        # FEEDBACK: Initial error state = actual deviation from reference.
+        # This replaces the old hard-coded `e_var[0] == 0` assumption.
+        constraints += [self._e_var[0] == self._e0_par]
 
         for k in range(N):
             # Slice this step's A and B matrices out of the packed parameters.
@@ -273,30 +346,21 @@ class MPCController:
             ]
 
             # --- Stage cost: tracking + effort + smoothness ---
-            # Tracking error  e_k^T Q e_k
-            cost += cp.quad_form(self._e_var[k], self.Q)
-            # Control effort  u_k^T R u_k
-            cost += cp.quad_form(self._u_var[k], self.R)
-            # Smoothness (Δu)^T R_d (Δu) — rate of change of input
-            if k == 0:
-                delta_u = self._u_var[k] - self._u_prev_par
-            else:
-                delta_u = self._u_var[k] - self._u_var[k - 1]
-            cost += cp.quad_form(delta_u, self.Rd)
+            cost += cp.quad_form(self._e_var[k], self.Q)   # tracking error
+            cost += cp.quad_form(self._u_var[k], self.R)   # control effort
+            # Smoothness: penalise rapid input changes
+            du = self._u_var[k] - (self._u_prev_par if k == 0 else self._u_var[k - 1])
+            cost += cp.quad_form(du, self.Rd)
 
             # --- Input bound constraints ---
             constraints += [
-                self._u_var[k, 0] >= A_MIN,          # a_min ≤ a_k
-                self._u_var[k, 0] <= A_MAX,           # a_k ≤ a_max
-                self._u_var[k, 1] >= -DELTA_MAX,      # −δ_max ≤ δ_k
-                self._u_var[k, 1] <=  DELTA_MAX,      # δ_k ≤ δ_max
+                self._u_var[k, 0] >= A_MIN,
+                self._u_var[k, 0] <= A_MAX,
+                self._u_var[k, 1] >= -DELTA_MAX,
+                self._u_var[k, 1] <=  DELTA_MAX,
             ]
 
             # --- Input-rate (slew-rate) constraints ---
-            if k == 0:
-                du = self._u_var[k] - self._u_prev_par
-            else:
-                du = self._u_var[k] - self._u_var[k - 1]
             constraints += [
                 du[0] >= -DA_MAX,
                 du[0] <=  DA_MAX,
@@ -305,15 +369,21 @@ class MPCController:
             ]
 
             # --- Wall / boundary constraints ---
-            # | n_k^T (p_k − p_ref_k) | ≤ w_eff
-            # where e_pos_k = e_var[k+1, 0:2]  (position error at next step)
-            # Written as two linear inequalities (see §4 of MPC_FORMULATION.md).
+            # |n_k^T e_pos| ≤ w_eff  (written as two linear inequalities)
             e_pos = self._e_var[k + 1, :2]
             n_k   = self._n_par[k, :]
             constraints += [
                  n_k @ e_pos <= self._w_par,
                 -n_k @ e_pos <= self._w_par,
             ]
+
+            # Obstacle constraints (linearized halfplanes)
+            for j in range(self.M_max):
+                idx = k * self.M_max + j
+                constraints += [
+                    self._obs_A_par[idx, :] @ e_pos <= self._obs_b_par[idx] + self._obs_slack[idx]
+                ]
+                cost += 100000.0 * self._obs_slack[idx] + 10000.0 * cp.square(self._obs_slack[idx])
 
         # --- Terminal cost  e_N^T P e_N ---
         cost += cp.quad_form(self._e_var[N], self.P)
@@ -390,25 +460,36 @@ class MPCController:
 
     def _load_parameters(
         self,
+        state: np.ndarray,
         ref: np.ndarray,
         A_list: list[np.ndarray],
         B_list: list[np.ndarray],
         boundary_normals: np.ndarray,
         half_width: float,
+        obstacles: list[dict] | None = None,
     ):
         """Pack all CVXPY parameter values from the current environment data."""
         N = self.N
 
-        # Pack A and B into the flat (N*4, 4) and (N*4, 2) parameter shapes.
-        A_packed = np.vstack(A_list)   # (N*4, 4)
-        B_packed = np.vstack(B_list)   # (N*4, 2)
-        self._A_par.value = A_packed
-        self._B_par.value = B_packed
+        # --- Compute and set the initial error state e_0 = state - ref[0] ---
+        # This is the feedback mechanism: the MPC now "knows" where the car
+        # actually is relative to the reference, so it can correct real deviations.
+        e0 = np.asarray(state, dtype=float) - ref[0]
+        # Normalize the heading error to [-pi, pi]
+        e0[3] = (e0[3] + np.pi) % (2 * np.pi) - np.pi
+        # Clamp errors to keep the QP feasible even if car is far off-track
+        e0[:2] = np.clip(e0[:2], -E0_CLIP_POS, E0_CLIP_POS)
+        e0[2]  = np.clip(e0[2],  -E0_CLIP_VEL, E0_CLIP_VEL)
+        e0[3]  = np.clip(e0[3],  -E0_CLIP_ANG, E0_CLIP_ANG)
+        self._e0_par.value = e0
 
-        # Boundary normals: take the first N normals (boundary_normals has M rows,
-        # where M ≥ N since get_boundary_data is called with the same N).
-        normals_N = np.asarray(boundary_normals[:N], dtype=float)
+        # --- Pack A and B into the flat (N*4, 4) and (N*4, 2) parameter shapes. ---
+        self._A_par.value = np.vstack(A_list)   # (N*4, 4)
+        self._B_par.value = np.vstack(B_list)   # (N*4, 2)
+
+        # --- Boundary normals: take the first N rows ---
         # Safety: normalise in case the environment doesn't guarantee unit length.
+        normals_N = np.asarray(boundary_normals[:N], dtype=float)
         norms = np.linalg.norm(normals_N, axis=1, keepdims=True)
         norms = np.where(norms < 1e-9, 1.0, norms)
         self._n_par.value = normals_N / norms
@@ -418,6 +499,48 @@ class MPCController:
 
         # Previous applied input (for slew-rate constraint at k=0).
         self._u_prev_par.value = self._u_last_applied.copy()
+
+        # Construction of linear obstacle constraints
+        obs_A_val = np.zeros((N * self.M_max, 2))
+        obs_b_val = np.ones(N * self.M_max) * 1e5  # Inactive constraint by default
+
+        if obstacles is not None:
+            for j, obs in enumerate(obstacles[:self.M_max]):
+                obs_pos = np.array([obs["x"], obs["y"]])
+                r_obs = obs["r"]
+                # Car safety radius = 0.55m
+                d_min = r_obs + 0.55
+
+                for k in range(N):
+                    # Linearization at the reference horizon k+1
+                    p_ref = ref[k+1, :2]
+                    n_k = self._n_par.value[k]  # Unit track normal at step k
+
+                    # Vector from obstacle to reference position
+                    dp = p_ref - obs_pos
+                    d_lat = np.dot(n_k, dp)
+
+                    # Determine avoidance direction (left or right)
+                    lateral_dist = d_lat
+                    if np.abs(lateral_dist) < 0.05:
+                        # Obstacle is on the centerline, use actual state lateral deviation
+                        lateral_dist = np.dot(n_k, state[:2] - obs_pos)
+                    if np.abs(lateral_dist) < 0.05:
+                        # Default to left if still close to zero
+                        direction = 1.0
+                    else:
+                        direction = np.sign(lateral_dist)
+
+                    u = direction * n_k
+                    c = -u
+                    r = np.abs(d_lat) - d_min
+
+                    idx = k * self.M_max + j
+                    obs_A_val[idx, :] = c
+                    obs_b_val[idx] = r
+
+        self._obs_A_par.value = obs_A_val
+        self._obs_b_par.value = obs_b_val
 
     # -----------------------------------------------------------------------
     # Helper: warm-start the solver
@@ -443,7 +566,7 @@ class MPCController:
         ref: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Return when the MPC solve fails.
+        Return when the MPC solve fails (legacy `solve` method).
 
         Falls back to the same behaviour as the original mpc_placeholder:
         command the next reference point and return the reference path as the
@@ -452,6 +575,18 @@ class MPCController:
         command = ref[1] if len(ref) > 1 else ref[0]
         predicted = ref[:, :2]
         return np.asarray(command, dtype=float), np.asarray(predicted, dtype=float)
+
+    def _fallback_control(self, ref: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Fallback control for solve_control when the MPC solve fails.
+
+        Returns a neutral action (small positive acceleration, zero steering)
+        to keep the car moving along the reference rather than braking to a stop.
+        """
+        # Apply small positive acceleration and zero steering to follow the reference
+        action = np.array([0.5, 0.0], dtype=float)
+        predicted = ref[:, :2]
+        return action, predicted
 
 
 # ---------------------------------------------------------------------------
@@ -485,25 +620,20 @@ if __name__ == "__main__":
     print("MPCController smoke-test:")
     print(f"  N={N}, dt={dt}, wheelbase L={WHEELBASE} m")
 
+    from sim.car import KinematicBicycleModel
+    car = KinematicBicycleModel(wheelbase=WHEELBASE)
+
     for step in range(5):
         ref                      = track.get_reference(state, N, dt)
         boundary_normals, half_w = track.get_boundary_data(track.last_index, N)
-        command, predicted       = mpc.solve(ref, boundary_normals, half_w)
+        action, predicted        = mpc.solve_control(state, ref, boundary_normals, half_w)
 
-        assert command.shape   == (4,),          f"command shape {command.shape}"
+        assert action.shape    == (2,),          f"action shape {action.shape}"
         assert predicted.shape == (N + 1, 2),    f"predicted shape {predicted.shape}"
-        print(f"  step {step+1}: command=[{command[0]:.2f}, {command[1]:.2f}, "
-              f"{command[2]:.2f} m/s, {np.degrees(command[3]):.1f}°]  "
+        print(f"  step {step+1}: action=[a={action[0]:.3f}, δ={action[1]:.3f} rad]  "
               f"status={mpc._problem.status}")
 
-        # Advance the fake state toward the commanded point (same as run.py).
-        tx, ty, tv = command[0], command[1], command[2]
-        dx, dy = tx - state[0], ty - state[1]
-        dist   = np.hypot(dx, dy)
-        heading = np.arctan2(dy, dx) if dist > 1e-9 else state[3]
-        step_  = min(dist, tv * dt)
-        state  = np.array([state[0] + step_ * np.cos(heading),
-                           state[1] + step_ * np.sin(heading),
-                           tv, heading])
+        # Advance the state using the real kinematic model
+        state = car.step(state, action, dt)
 
     print("  All shape/type checks passed.")

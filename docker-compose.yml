@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # Controller node — runs the MPC solver and listens for ZMQ requests
+  controller:
+    build: .
+    command: python run.py --mode controller --host 0.0.0.0 --port 5555
+    ports:
+      - "5555:5555"
+    # Health check: verify the ZMQ port is listening before the simulator connects
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',5555)); s.close(); print('ok')"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Simulator node — runs physics integration and sends states to controller
+  simulator:
+    build: .
+    command: python run.py --mode simulator --host controller --port 5555
+    depends_on:
+      controller:
+        condition: service_healthy
+    volumes:
+      # Mount output folder so trajectory plots are visible on the host
+      - ./output:/app/output
