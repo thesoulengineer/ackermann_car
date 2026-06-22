@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 import time
 import pytest
-from communication.network import SimulatorClient, ControllerServer
+from ackermann_car.communication.network import SimulatorClient, ControllerServer
 
 
 def test_zmq_communication_loop():

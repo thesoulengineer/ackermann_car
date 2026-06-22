@@ -7,7 +7,7 @@ Unit tests for the kinematic bicycle dynamics model.
 from __future__ import annotations
 
 import numpy as np
-from sim.car import KinematicBicycleModel
+from ackermann_car.sim.car import KinematicBicycleModel
 
 
 def test_straight_line_acceleration():

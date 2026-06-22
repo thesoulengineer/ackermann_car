@@ -133,7 +133,7 @@ class Track:
         """Per-sample reference speed (m/s), computed once and cached."""
         if self._v_ref is None:
             try:
-                from sim.speed_profile import speed_profile
+                from .speed_profile import speed_profile
             except ImportError:  # running as a script with sim/ on the path
                 from speed_profile import speed_profile
             self._v_ref = speed_profile(self, **self._speed_kwargs)

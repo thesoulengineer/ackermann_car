@@ -68,7 +68,7 @@ class LapManager:
 
 if __name__ == "__main__":
     try:
-        from sim.track import Track
+        from .track import Track
     except ImportError:  # run directly as `python sim/lap_manager.py`
         from track import Track
 

@@ -21,12 +21,12 @@ if not os.environ.get("DISPLAY") and sys.platform != "win32":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from sim.track import Track
-from sim.lap_manager import LapManager
-from sim.visualizer import LiveView
-from sim.car import KinematicBicycleModel
-from controllers.mpc_controller import MPCController
-from communication.network import SimulatorClient, ControllerServer
+from ackermann_car.sim.track import Track
+from ackermann_car.sim.lap_manager import LapManager
+from ackermann_car.sim.visualizer import LiveView
+from ackermann_car.sim.car import KinematicBicycleModel
+from ackermann_car.controllers.mpc import MPCController
+from ackermann_car.communication.network import SimulatorClient, ControllerServer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")

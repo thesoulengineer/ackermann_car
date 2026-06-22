@@ -11,7 +11,7 @@ import logging
 import warnings
 import numpy as np
 import cvxpy as cp
-from controllers.base_controller import BaseController
+from .base import BaseController
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import cvxpy as cp
 import pytest
-from controllers.mpc_controller import MPCController
+from ackermann_car.controllers.mpc import MPCController
 
 
 def test_no_obstacles():
