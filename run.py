@@ -2,12 +2,7 @@
 run.py
 
 Unified entry point for the Ackermann car MPC racetrack simulation.
-Can run the simulator client, the controller server, or spawn both concurrently.
-
-Usage:
-  python run.py                     # Runs both simulator and controller (default)
-  python run.py --mode simulator    # Runs only the simulator client
-  python run.py --mode controller   # Runs only the controller server
+Runs both simulator and controller concurrently over ZeroMQ TCP sockets.
 """
 
 from __future__ import annotations
@@ -37,27 +32,25 @@ from communication.network import SimulatorClient, ControllerServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("run")
 
-# Define racetrack obstacles
-# These are placed directly on the drivable area of the oval track.
+# Define racetrack obstacles placed on the track
 OBSTACLES = [
-    {"x": 35.0, "y": 15.0, "r": 1.5},    # First curve segment
-    {"x": 0.0, "y": 30.0, "r": 1.5},     # Top straight/arc
-    {"x": -35.0, "y": -15.0, "r": 2.0},   # Far turn
+    {"x": 0.0, "y": 30.0, "r": 0.5},     # Top straight (directly blocking centerline)
+    {"x": -35.0, "y": -15.0, "r": 0.5},  # Far curve
+    {"x": -10.0, "y": 30.0, "r": 0.5},   # Top straight extra
+    {"x": -25.0, "y": 20.0, "r": 0.5},   # Turn approach
+    {"x": 15.0, "y": -28.0, "r": 0.5},   # Bottom straight
+    {"x": 25.0, "y": -20.0, "r": 0.5},   # Bottom straight turn
 ]
 
 
 def run_simulator(host: str, port: int):
-    """Run the simulator client process.
-
-    Connects to the controller server, integrates dynamics, updates
-    lap timing, and renders the visualizer.
-    """
+    """Run the simulator client process."""
     logger.info("Starting Simulator Client...")
     track = Track.oval()
     model = KinematicBicycleModel(wheelbase=0.3)
     lap_mgr = LapManager(track)
 
-    # Initial state: on the centerline at start/finish line.
+    # Initial state: on the centerline at start/finish line
     state = np.array([track.cx[0], track.cy[0], track.v_ref[0], track.theta[0]])
 
     # Initialize ZeroMQ client
@@ -65,18 +58,18 @@ def run_simulator(host: str, port: int):
     client.connect()
 
     # Simulation parameters
-    N = 15
+    N = 25
     dt = 0.1
     sim_t = 0.0
 
     def simulate_generator():
         nonlocal state, sim_t
-        while lap_mgr.laps_completed < 2:
-            # Query track environment
+        while lap_mgr.laps_completed < 1:
+            # Query track environment for a clean, consistent reference path
             ref = track.get_reference(state, N, dt)
             normals, half_width = track.get_boundary_data(track.last_index, N)
 
-            # Send state to controller and get control actions and predicted horizon
+            # Send state and ref directly to the controller process
             try:
                 reply = client.send_state_and_wait(
                     state=state.tolist(),
@@ -91,15 +84,15 @@ def run_simulator(host: str, port: int):
                 logger.error(f"Communication error: {e}. Stopping simulation.")
                 break
 
-            # Integrate vehicle physical dynamics (using actual inputs [a, delta])
+            # Integrate vehicle physical dynamics using actual inputs [a, delta]
             state = model.step(state, action, dt)
 
-            # Injection of perturbation/noise to simulate real-world drift and deviations
+            # Inject moderate process noise to simulate real-world drifts and slips
             noise = np.array([
-                np.random.normal(0, 0.03),   # X deviation
-                np.random.normal(0, 0.03),   # Y deviation
-                np.random.normal(0, 0.01),   # Speed fluctuation
-                np.random.normal(0, 0.005),  # Heading fluctuation
+                np.random.normal(0, 0.02),   # X drift (m)
+                np.random.normal(0, 0.02),   # Y drift (m)
+                np.random.normal(0, 0.01),   # Speed noise (m/s)
+                np.random.normal(0, 0.003),  # Yaw noise (rad)
             ])
             state += noise
             state[3] = (state[3] + np.pi) % (2 * np.pi) - np.pi
@@ -113,7 +106,7 @@ def run_simulator(host: str, port: int):
 
     # Render Visualizer
     view = LiveView(track)
-    view.ax.set_title("Decoupled MPC simulation - ZeroMQ TCP Loop")
+    view.ax.set_title("Decoupled MPC Simulation - Dynamic Obstacle Avoidance")
 
     # Draw obstacles as red circle patches on the visualizer axis
     for i, obs in enumerate(OBSTACLES):
@@ -135,8 +128,8 @@ def run_simulator(host: str, port: int):
         step = 0
         for frame_data in simulate_generator():
             state, predicted, hud = frame_data
-            # Capture every 5 steps to avoid bloating the GIF size (2 Hz)
-            if step % 5 == 0:
+            # Sample at 5 Hz (every 2nd step) for an efficient output GIF file size
+            if step % 2 == 0:
                 frame_samples.append((state.copy(), predicted.copy(), hud.copy()))
             step += 1
             if step % 20 == 0:
@@ -150,8 +143,8 @@ def run_simulator(host: str, port: int):
 
         try:
             # Recreate the animation in memory and save it to disk using Pillow
-            anim = view.animate(frame_samples, interval=500)  # 500ms per frame for 2 Hz
-            anim.save(gif_path, writer="pillow", fps=2)
+            anim = view.animate(frame_samples, interval=200)  # 200ms per frame for 5 Hz
+            anim.save(gif_path, writer="pillow", fps=5)
             logger.info(f"Success: Dynamic animation saved to: {gif_path}")
         except Exception as e:
             logger.error(f"Error saving GIF ({e}). Falling back to static PNG trajectory.")
@@ -181,12 +174,9 @@ def run_simulator(host: str, port: int):
 
 
 def run_controller(host: str, port: int):
-    """Run the controller server process.
-
-    Binds the socket and solves MPC problems as they are requested.
-    """
+    """Run the controller server process."""
     logger.info("Starting Controller Server...")
-    controller = MPCController(N=15, dt=0.1)
+    controller = MPCController(N=25, dt=0.1)
 
     server = ControllerServer(host=host, port=port)
     server.bind()
@@ -198,9 +188,9 @@ def run_controller(host: str, port: int):
             request = server.receive_request()
 
             # Unpack all fields including actual vehicle state
-            state   = np.array(request["state"])
-            ref     = np.array(request["ref"])
-            normals = np.array(request["normals"])
+            state      = np.array(request["state"])
+            ref        = np.array(request["ref"])
+            normals    = np.array(request["normals"])
             half_width = float(request["half_width"])
             obstacles  = request.get("obstacles", [])
 
@@ -216,7 +206,7 @@ def run_controller(host: str, port: int):
             if req_count % 50 == 0:
                 logger.info(
                     f"[Controller] Solved {req_count} steps | "
-                    f"last action: a={action[0]:.3f}, δ={action[1]:.3f} rad"
+                    f"last action: a={action[0]:.3f}, d={action[1]:.3f} rad"
                 )
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received.")
@@ -230,18 +220,13 @@ def run_controller(host: str, port: int):
 def run_both(host: str, port: int):
     """Spawns the controller process and runs the simulator in the main thread."""
     logger.info("Spawning decoupled controller and simulator processes...")
-
-    # Spawn controller server subprocess
-    # Uses the current python interpreter to run this same script with --mode controller
     controller_process = subprocess.Popen(
         [sys.executable, __file__, "--mode", "controller", "--host", host, "--port", str(port)]
     )
 
-    # Let the controller server bind to the socket first
     time.sleep(0.8)
 
     try:
-        # Run simulator client in the main thread
         run_simulator(host, port)
     finally:
         logger.info("Terminating controller process...")
