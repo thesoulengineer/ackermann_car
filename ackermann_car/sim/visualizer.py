@@ -239,7 +239,7 @@ def _centerline_drive(track, dt=0.1, n_laps=2, N=15):
 
 if __name__ == "__main__":
     try:
-        from sim.track import Track
+        from .track import Track
     except ImportError:  # run directly as `python sim/visualizer.py`
         from track import Track
 
