@@ -25,7 +25,7 @@ from ackermann_car.sim.track import Track
 from ackermann_car.sim.lap_manager import LapManager
 from ackermann_car.sim.visualizer import LiveView
 from ackermann_car.sim.car import KinematicBicycleModel
-from ackermann_car.controllers.mpc import MPCController
+from ackermann_car.controllers.hybrid_mpc import HybridMPCController
 from ackermann_car.communication.network import SimulatorClient, ControllerServer
 
 # Setup logging
@@ -34,19 +34,22 @@ logger = logging.getLogger("run")
 
 # Define racetrack obstacles placed on the track
 OBSTACLES = [
-    {"x": 0.0, "y": 30.0, "r": 0.5},     # Top straight (directly blocking centerline)
-    {"x": -35.0, "y": -15.0, "r": 0.5},  # Far curve
-    {"x": -10.0, "y": 30.0, "r": 0.5},   # Top straight extra
-    {"x": -25.0, "y": 20.0, "r": 0.5},   # Turn approach
-    {"x": 15.0, "y": -28.0, "r": 0.5},   # Bottom straight
-    {"x": 25.0, "y": -20.0, "r": 0.5},   # Bottom straight turn
+    {"x": 0.0, "y": 30.0, "r": 2.5},     # Top straight (directly blocking centerline)
+    {"x": -35.0, "y": -15.0, "r": 2.5},  # Far curve
+    {"x": -10.0, "y": 30.0, "r": 1.0},   # Top straight extra
+    {"x": -25.0, "y": 20.0, "r": 2.0},   # Turn approach
+    {"x": 15.0, "y": -28.0, "r": 1.8},   # Bottom straight
+    {"x": 25.0, "y": -20.0, "r": 2.8},   # Bottom straight turn
 ]
 
 
 def run_simulator(host: str, port: int):
     """Run the simulator client process."""
     logger.info("Starting Simulator Client...")
-    track = Track.oval()
+    # MEJORA DE DISCRETIZACIÓN DE PISTA: 
+    # Incrementamos los waypoints a n=100. Esto produce una elipse analíticamente perfecta, 
+    # eliminando las ondulaciones de heading en el spline que arrojaban al coche hacia adentro.
+    track = Track.oval(n=100)
     model = KinematicBicycleModel(wheelbase=0.3)
     lap_mgr = LapManager(track)
 
@@ -57,8 +60,8 @@ def run_simulator(host: str, port: int):
     client = SimulatorClient(host=host, port=port)
     client.connect()
 
-    # Simulation parameters
-    N = 25
+    # OPTIMIZACIÓN DE CONTROL Y RENDIMIENTO:
+    N = 10
     dt = 0.1
     sim_t = 0.0
 
@@ -129,7 +132,7 @@ def run_simulator(host: str, port: int):
         for frame_data in simulate_generator():
             state, predicted, hud = frame_data
             # Sample at 5 Hz (every 2nd step) for an efficient output GIF file size
-            if step % 2 == 0:
+            if step % 20 == 0:
                 frame_samples.append((state.copy(), predicted.copy(), hud.copy()))
             step += 1
             if step % 20 == 0:
@@ -176,7 +179,7 @@ def run_simulator(host: str, port: int):
 def run_controller(host: str, port: int):
     """Run the controller server process."""
     logger.info("Starting Controller Server...")
-    controller = MPCController(N=25, dt=0.1)
+    controller = HybridMPCController(N=10, dt=0.1, enable_walls=True, enable_obstacles=True, max_iter=2, solver="CLARABEL")
 
     server = ControllerServer(host=host, port=port)
     server.bind()

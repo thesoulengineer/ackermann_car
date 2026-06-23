@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   # Controller node — runs the MPC solver and listens for ZMQ requests
   controller:
     build: .
-    command: python run.py --mode controller --host 0.0.0.0 --port 5555
+    command: python scripts/run.py --mode controller --host 0.0.0.0 --port 5555
     ports:
       - "5555:5555"
     # Health check: verify the ZMQ port is listening before the simulator connects
@@ -19,7 +17,7 @@ services:
   # Simulator node — runs physics integration and sends states to controller
   simulator:
     build: .
-    command: python run.py --mode simulator --host controller --port 5555
+    command: python scripts/run.py --mode simulator --host controller --port 5555
     depends_on:
       controller:
         condition: service_healthy

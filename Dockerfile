@@ -34,4 +34,4 @@ COPY . .
 ENV PYTHONPATH="/app"
 
 # Default: run tests then launch the full simulation (both nodes spawned in run.py)
-CMD ["sh", "-c", "pytest && python run.py"]
+CMD ["sh", "-c", "pytest && python scripts/run.py"]
