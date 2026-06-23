@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import os
 import time
-import numpy as np
+
 import cvxpy as cp
+import numpy as np
 import pytest
+
 from ackermann_car.controllers.hybrid_mpc import HybridMPCController
 
 
@@ -46,17 +48,14 @@ def _print_diagnostics(mpc, solve_time, label="MPC solve"):
 
 # ---------- Parametrized Unit Tests (Runs for both OSQP and CLARABEL) ----------
 
+
 @pytest.mark.parametrize("solver_name", ["OSQP", "CLARABEL"])
 def test_walls_only(solver_name):
     """Verify that wall constraints keep the car within track boundaries."""
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=True,
-        enable_obstacles=False,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=True, enable_obstacles=False, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -70,7 +69,7 @@ def test_walls_only(solver_name):
         ref=ref,
         boundary_normals=boundary_normals,
         half_width=half_width,
-        obstacles=None
+        obstacles=None,
     )
     elapsed = time.perf_counter() - t0
 
@@ -88,11 +87,7 @@ def test_obstacles_only(solver_name):
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=False,
-        enable_obstacles=True,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=False, enable_obstacles=True, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -107,7 +102,7 @@ def test_obstacles_only(solver_name):
         ref=ref,
         boundary_normals=boundary_normals,
         half_width=half_width,
-        obstacles=obstacles
+        obstacles=obstacles,
     )
     elapsed = time.perf_counter() - t0
 
@@ -126,11 +121,7 @@ def test_walls_and_obstacles(solver_name):
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=True,
-        enable_obstacles=True,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=True, enable_obstacles=True, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -145,7 +136,7 @@ def test_walls_and_obstacles(solver_name):
         ref=ref,
         boundary_normals=boundary_normals,
         half_width=half_width,
-        obstacles=obstacles
+        obstacles=obstacles,
     )
     elapsed = time.perf_counter() - t0
 
@@ -166,11 +157,7 @@ def test_no_constraints_fallback(solver_name):
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=False,
-        enable_obstacles=False,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=False, enable_obstacles=False, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -184,7 +171,7 @@ def test_no_constraints_fallback(solver_name):
         ref=ref,
         boundary_normals=boundary_normals,
         half_width=half_width,
-        obstacles=None
+        obstacles=None,
     )
     elapsed = time.perf_counter() - t0
 
@@ -200,11 +187,7 @@ def test_unavoidable_obstacle(solver_name):
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=True,
-        enable_obstacles=True,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=True, enable_obstacles=True, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -219,7 +202,7 @@ def test_unavoidable_obstacle(solver_name):
         ref=ref,
         boundary_normals=boundary_normals,
         half_width=half_width,
-        obstacles=obstacles
+        obstacles=obstacles,
     )
     elapsed = time.perf_counter() - t0
 
@@ -238,11 +221,7 @@ def test_performance_stress(solver_name):
     N = 10
     dt = 0.1
     mpc = HybridMPCController(
-        N=N, dt=dt,
-        enable_walls=True,
-        enable_obstacles=True,
-        max_iter=2,
-        solver=solver_name
+        N=N, dt=dt, enable_walls=True, enable_obstacles=True, max_iter=2, solver=solver_name
     )
 
     ref = np.array([[x, 0.0, 2.0, 0.0] for x in np.linspace(0.0, 1.5, N + 1)])
@@ -271,7 +250,7 @@ def test_performance_stress(solver_name):
 # ---------- Comparative Benchmark Table ----------
 @pytest.mark.skipif(
     os.environ.get("RUN_COMPARISON") != "1",
-    reason="Set RUN_COMPARISON=1 to run this extended benchmark"
+    reason="Set RUN_COMPARISON=1 to run this extended benchmark",
 )
 def test_parameter_comparison():
     """Benchmark different solver settings and print a comparison table."""
@@ -312,8 +291,8 @@ def test_parameter_comparison():
                         else:
                             mpc._osqp_polish = False
 
-                        ref = ref_full[:N+1]
-                        boundary_normals = boundary_normals_full[:N+1]
+                        ref = ref_full[: N + 1]
+                        boundary_normals = boundary_normals_full[: N + 1]
 
                         t0 = time.perf_counter()
                         action, predicted = mpc.solve_control(
@@ -321,50 +300,71 @@ def test_parameter_comparison():
                             ref=ref,
                             boundary_normals=boundary_normals,
                             half_width=half_width,
-                            obstacles=obstacles
+                            obstacles=obstacles,
                         )
                         elapsed = time.perf_counter() - t0
 
                         status = mpc._problem.status
-                        iters = mpc._problem.solver_stats.num_iters if hasattr(mpc._problem.solver_stats, 'num_iters') else None
+                        iters = (
+                            mpc._problem.solver_stats.num_iters
+                            if hasattr(mpc._problem.solver_stats, "num_iters")
+                            else None
+                        )
                         obj = mpc._problem.objective.value
                         slack = mpc._S_var.value
                         slack_mean = np.mean(slack) if slack is not None else np.nan
                         max_cross = np.max(np.abs(predicted[:, 1]))
 
-                        results.append({
-                            "N": N,
-                            "rho": rho,
-                            "solver": solver,
-                            "polish": "on" if polish else "off",
-                            "time": elapsed,
-                            "status": status,
-                            "iters": iters,
-                            "objective": obj,
-                            "slack_mean": slack_mean,
-                            "max_cross": max_cross
-                        })
+                        results.append(
+                            {
+                                "N": N,
+                                "rho": rho,
+                                "solver": solver,
+                                "polish": "on" if polish else "off",
+                                "time": elapsed,
+                                "status": status,
+                                "iters": iters,
+                                "objective": obj,
+                                "slack_mean": slack_mean,
+                                "max_cross": max_cross,
+                            }
+                        )
                     except Exception as e:
-                        results.append({
-                            "N": N, "rho": rho, "solver": solver,
-                            "polish": "on" if polish else "off",
-                            "time": np.nan, "status": f"ERROR: {str(e)[:50]}",
-                            "iters": None, "objective": None,
-                            "slack_mean": None, "max_cross": None
-                        })
+                        results.append(
+                            {
+                                "N": N,
+                                "rho": rho,
+                                "solver": solver,
+                                "polish": "on" if polish else "off",
+                                "time": np.nan,
+                                "status": f"ERROR: {str(e)[:50]}",
+                                "iters": None,
+                                "objective": None,
+                                "slack_mean": None,
+                                "max_cross": None,
+                            }
+                        )
 
     # Print Table
-    print("\n" + "="*120)
+    print("\n" + "=" * 120)
     print("Solver Comparison Benchmark (walls + obstacles)")
-    print("="*120)
-    header = f"{'N':>3} {'rho':>8} {'solver':>10} {'polish':>6} {'time (s)':>10} {'iters':>6} {'status':>16} {'obj':>12} {'slack_mean':>12} {'max_cross':>10}"
+    print("=" * 120)
+    header = (
+        f"{'N':>3} {'rho':>8} {'solver':>10} {'polish':>6}"
+        f" {'time (s)':>10} {'iters':>6} {'status':>16}"
+        f" {'obj':>12} {'slack_mean':>12} {'max_cross':>10}"
+    )
     print(header)
-    print("-"*120)
+    print("-" * 120)
     for r in results:
-        time_str = f"{r['time']:.4f}" if not np.isnan(r['time']) else "FAIL"
-        iters_str = str(r['iters']) if r['iters'] is not None else "-"
-        obj_str = f"{r['objective']:.1f}" if r['objective'] is not None else "-"
-        slack_str = f"{r['slack_mean']:.3f}" if r['slack_mean'] is not None else "-"
-        cross_str = f"{r['max_cross']:.3f}" if r['max_cross'] is not None else "-"
-        print(f"{r['N']:3d} {r['rho']:8.0e} {r['solver']:10} {r['polish']:6} {time_str:>10} {iters_str:>6} {r['status']:>16} {obj_str:>12} {slack_str:>12} {cross_str:>10}")
-    print("="*120)
+        time_str = f"{r['time']:.4f}" if not np.isnan(r["time"]) else "FAIL"
+        iters_str = str(r["iters"]) if r["iters"] is not None else "-"
+        obj_str = f"{r['objective']:.1f}" if r["objective"] is not None else "-"
+        slack_str = f"{r['slack_mean']:.3f}" if r["slack_mean"] is not None else "-"
+        cross_str = f"{r['max_cross']:.3f}" if r["max_cross"] is not None else "-"
+        print(
+            f"{r['N']:3d} {r['rho']:8.0e} {r['solver']:10} {r['polish']:6}"
+            f" {time_str:>10} {iters_str:>6} {r['status']:>16}"
+            f" {obj_str:>12} {slack_str:>12} {cross_str:>10}"
+        )
+    print("=" * 120)

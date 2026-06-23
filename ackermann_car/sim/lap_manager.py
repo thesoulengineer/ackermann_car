@@ -52,8 +52,9 @@ class LapManager:
             lap_time = t - self.lap_start_t
             self.lap_times.append(lap_time)
             self.last_lap_time = lap_time
-            self.best_lap_time = (lap_time if self.best_lap_time is None
-                                  else min(self.best_lap_time, lap_time))
+            self.best_lap_time = (
+                lap_time if self.best_lap_time is None else min(self.best_lap_time, lap_time)
+            )
             self.laps_completed += 1
             self.lap += 1
             self.lap_start_t = t

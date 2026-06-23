@@ -9,24 +9,25 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 import sys
 import time
-import subprocess
-import os
-import numpy as np
 
 # Configure headless matplotlib backend for Docker/CI execution
 import matplotlib
+import numpy as np
+
 if not os.environ.get("DISPLAY") and sys.platform != "win32":
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from ackermann_car.sim.track import Track
-from ackermann_car.sim.lap_manager import LapManager
-from ackermann_car.sim.visualizer import LiveView
-from ackermann_car.sim.car import KinematicBicycleModel
+from ackermann_car.communication.network import ControllerServer, SimulatorClient
 from ackermann_car.controllers.hybrid_mpc import HybridMPCController
-from ackermann_car.communication.network import SimulatorClient, ControllerServer
+from ackermann_car.sim.car import KinematicBicycleModel
+from ackermann_car.sim.lap_manager import LapManager
+from ackermann_car.sim.track import Track
+from ackermann_car.sim.visualizer import LiveView
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -34,20 +35,20 @@ logger = logging.getLogger("run")
 
 # Define racetrack obstacles placed on the track
 OBSTACLES = [
-    {"x": 0.0, "y": 30.0, "r": 2.5},     # Top straight (directly blocking centerline)
+    {"x": 0.0, "y": 30.0, "r": 2.5},  # Top straight (directly blocking centerline)
     {"x": -35.0, "y": -15.0, "r": 2.5},  # Far curve
-    {"x": -10.0, "y": 30.0, "r": 1.0},   # Top straight extra
-    {"x": -25.0, "y": 20.0, "r": 2.0},   # Turn approach
-    {"x": 15.0, "y": -28.0, "r": 1.8},   # Bottom straight
-    {"x": 25.0, "y": -20.0, "r": 2.8},   # Bottom straight turn
+    {"x": -10.0, "y": 30.0, "r": 1.0},  # Top straight extra
+    {"x": -25.0, "y": 20.0, "r": 2.0},  # Turn approach
+    {"x": 15.0, "y": -28.0, "r": 1.8},  # Bottom straight
+    {"x": 25.0, "y": -20.0, "r": 2.8},  # Bottom straight turn
 ]
 
 
 def run_simulator(host: str, port: int):
     """Run the simulator client process."""
     logger.info("Starting Simulator Client...")
-    # MEJORA DE DISCRETIZACIÓN DE PISTA: 
-    # Incrementamos los waypoints a n=100. Esto produce una elipse analíticamente perfecta, 
+    # MEJORA DE DISCRETIZACIÓN DE PISTA:
+    # Incrementamos los waypoints a n=100. Esto produce una elipse analíticamente perfecta,
     # eliminando las ondulaciones de heading en el spline que arrojaban al coche hacia adentro.
     track = Track.oval(n=100)
     model = KinematicBicycleModel(wheelbase=0.3)
@@ -91,12 +92,14 @@ def run_simulator(host: str, port: int):
             state = model.step(state, action, dt)
 
             # Inject moderate process noise to simulate real-world drifts and slips
-            noise = np.array([
-                np.random.normal(0, 0.02),   # X drift (m)
-                np.random.normal(0, 0.02),   # Y drift (m)
-                np.random.normal(0, 0.01),   # Speed noise (m/s)
-                np.random.normal(0, 0.003),  # Yaw noise (rad)
-            ])
+            noise = np.array(
+                [
+                    np.random.normal(0, 0.02),  # X drift (m)
+                    np.random.normal(0, 0.02),  # Y drift (m)
+                    np.random.normal(0, 0.01),  # Speed noise (m/s)
+                    np.random.normal(0, 0.003),  # Yaw noise (rad)
+                ]
+            )
             state += noise
             state[3] = (state[3] + np.pi) % (2 * np.pi) - np.pi
 
@@ -137,7 +140,8 @@ def run_simulator(host: str, port: int):
             step += 1
             if step % 20 == 0:
                 logger.info(
-                    f"Step {step:03d} | State: x={state[0]:.2f}, y={state[1]:.2f}, v={state[2]:.2f} | "
+                    f"Step {step:03d} | State: "
+                    f"x={state[0]:.2f}, y={state[1]:.2f}, v={state[2]:.2f} | "
                     f"Lap: {hud.get('lap', '-')}"
                 )
 
@@ -154,9 +158,12 @@ def run_simulator(host: str, port: int):
             # Fallback to classic PNG
             fig, ax = plt.subplots(figsize=(9, 7))
             from sim.visualizer import draw_track
+
             draw_track(track, ax=ax, title="Simulation Trajectory (Fallback)")
             for obs in OBSTACLES:
-                circle = plt.Circle((obs["x"], obs["y"]), obs["r"], color="crimson", alpha=0.6, zorder=5)
+                circle = plt.Circle(
+                    (obs["x"], obs["y"]), obs["r"], color="crimson", alpha=0.6, zorder=5
+                )
                 ax.add_patch(circle)
             xs = [f[0][0] for f in frame_samples]
             ys = [f[0][1] for f in frame_samples]
@@ -179,7 +186,9 @@ def run_simulator(host: str, port: int):
 def run_controller(host: str, port: int):
     """Run the controller server process."""
     logger.info("Starting Controller Server...")
-    controller = HybridMPCController(N=10, dt=0.1, enable_walls=True, enable_obstacles=True, max_iter=2, solver="CLARABEL")
+    controller = HybridMPCController(
+        N=10, dt=0.1, enable_walls=True, enable_obstacles=True, max_iter=2, solver="CLARABEL"
+    )
 
     server = ControllerServer(host=host, port=port)
     server.bind()
@@ -191,16 +200,14 @@ def run_controller(host: str, port: int):
             request = server.receive_request()
 
             # Unpack all fields including actual vehicle state
-            state      = np.array(request["state"])
-            ref        = np.array(request["ref"])
-            normals    = np.array(request["normals"])
+            state = np.array(request["state"])
+            ref = np.array(request["ref"])
+            normals = np.array(request["normals"])
             half_width = float(request["half_width"])
-            obstacles  = request.get("obstacles", [])
+            obstacles = request.get("obstacles", [])
 
             # Solve MPC QP with state feedback (closed-loop)
-            action, predicted = controller.solve_control(
-                state, ref, normals, half_width, obstacles
-            )
+            action, predicted = controller.solve_control(state, ref, normals, half_width, obstacles)
 
             # Reply with control action and visual horizon
             server.send_reply(action.tolist(), predicted.tolist())

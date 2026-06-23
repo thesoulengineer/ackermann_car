@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import threading
 import time
-import pytest
-from ackermann_car.communication.network import SimulatorClient, ControllerServer
+
+from ackermann_car.communication.network import ControllerServer, SimulatorClient
 
 
 def test_zmq_communication_loop():
-    """Verify that SimulatorClient and ControllerServer can establish a connection and exchange data correctly."""
+    """Verify SimulatorClient and ControllerServer can establish a connection and exchange data."""
     host = "127.0.0.1"
     port = 5557
 

@@ -4,7 +4,7 @@ controllers/hybrid_mpc.py
 Hybrid MPC controller using a highly stable iterative LTV-MPC (iMPC) formulation solved
 entirely in the vehicle's local (ego) frame, adapted from the reference cvxpy_mpc module.
 
-This implementation features dynamic reference speed scaling when approaching large 
+This implementation features dynamic reference speed scaling when approaching large
 obstacles to allow safe cornering, blended normal fields, and a hysteresis bypass latch.
 """
 
@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import logging
 import warnings
-import numpy as np
+
 import cvxpy as cp
+import numpy as np
+
 from .base import BaseController
 
 logger = logging.getLogger(__name__)
@@ -36,8 +38,8 @@ SPEED_MAX = 3.5
 Q_DIAG = np.array([1.0, 15.0, 10.0, 20.0])  # [along, cross, v, theta]
 P_SCALE = 8.0
 P_DIAG = Q_DIAG * P_SCALE
-R_DIAG = np.array([0.1, 5.0])               # [a, delta]
-RD_DIAG = np.array([0.05, 5.0])             # control rate penalties
+R_DIAG = np.array([0.1, 5.0])  # [a, delta]
+RD_DIAG = np.array([0.05, 5.0])  # control rate penalties
 
 WALL_MARGIN = 0.05
 OBSTACLE_MARGIN = 0.1
@@ -207,7 +209,7 @@ class HybridMPCController(BaseController):
                     + self._wall_normal_y[k] * self._states[1, k + 1]
                 )
                 constraints += [
-                signed_dist
+                    signed_dist
                     <= self._wall_half_width[k] + self._wall_ref_proj[k] + self._S_var[k],
                     -signed_dist
                     <= self._wall_half_width[k] - self._wall_ref_proj[k] + self._S_var[k],
@@ -294,12 +296,7 @@ class HybridMPCController(BaseController):
 
         B_lin = self.dt * B
 
-        f_xu = np.array([
-            v * ct,
-            v * st,
-            a,
-            v * td / self.wheelbase
-        ])
+        f_xu = np.array([v * ct, v * st, a, v * td / self.wheelbase])
 
         C_lin = self.dt * (f_xu - A @ x_bar - B @ u_bar)
 
@@ -336,7 +333,7 @@ class HybridMPCController(BaseController):
             last = normals[-1] if len(normals) > 0 else np.array([1.0, 0.0])
             pad = np.tile(last, (self.N + 1 - len(normals), 1))
             normals = np.vstack([normals, pad])
-        normals = normals[:self.N + 1]
+        normals = normals[: self.N + 1]
 
         # -------------------------------------------------------------------
         # 1. Transform global reference trajectory to vehicle-local ego-frame
@@ -388,11 +385,11 @@ class HybridMPCController(BaseController):
             self._bypass_side = None
         else:
             ox_e, oy_e, r_e, vx_e, vy_e = obstacle_ego
-            
+
             # Reset bypass memory if obstacle has successfully moved behind us
             if ox_e < -1.0:
                 self._bypass_side = None
-                
+
             # Latch bypass direction for consistent, stable avoidance:
             # If the obstacle is centered or slightly to the left, bypass on the left (side = 1.0)
             # to stay aligned with the CCW track flow, otherwise bypass on the right (side = -1.0)
@@ -618,17 +615,20 @@ class HybridMPCController(BaseController):
         action, predicted_xy = self.solve_control(
             state, ref, boundary_normals, half_width, obstacles
         )
-        command = np.array([
-            predicted_xy[1, 0],
-            predicted_xy[1, 1],
-            ref[1, 2],
-            ref[1, 3],
-        ], dtype=float)
+        command = np.array(
+            [
+                predicted_xy[1, 0],
+                predicted_xy[1, 1],
+                ref[1, 2],
+                ref[1, 3],
+            ],
+            dtype=float,
+        )
         return command, predicted_xy
 
     def _fallback_control(self, ref):
         """Recovery logic returning last safe actions (Emergency braking)."""
         action = np.zeros(2)
         action[0] = self.a_min  # Apply full deceleration for safety
-        action[1] = 0.0         # Maintain steering centered
+        action[1] = 0.0  # Maintain steering centered
         return action, ref[:, :2]

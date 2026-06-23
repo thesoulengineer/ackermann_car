@@ -92,5 +92,7 @@ if __name__ == "__main__":
         v = speed_profile(trk, v_max=8.0)
         k = np.abs(trk.kappa)
         i = int(v.argmin())
-        print(f"  {name:13s} v_ref min/max = {v.min():.2f} / {v.max():.2f} m/s"
-              f"  (slowest at s={trk.s[i]:6.1f} m, |kappa|={k[i]:.3f} 1/m)")
+        print(
+            f"  {name:13s} v_ref min/max = {v.min():.2f} / {v.max():.2f} m/s"
+            f"  (slowest at s={trk.s[i]:6.1f} m, |kappa|={k[i]:.3f} 1/m)"
+        )

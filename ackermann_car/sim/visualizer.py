@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from collections import deque
 
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
+import numpy as np
 from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
 
 
 def _closed(arr):
@@ -28,8 +28,8 @@ def _speed_line(ax, track, speed, cmap):
     """Draw the centerline as line segments coloured by reference speed."""
     pts = _closed(np.column_stack([track.cx, track.cy]))
     sp = np.concatenate([speed, speed[:1]])
-    segments = np.stack([pts[:-1], pts[1:]], axis=1)      # (N, 2, 2)
-    seg_speed = 0.5 * (sp[:-1] + sp[1:])                  # colour per segment
+    segments = np.stack([pts[:-1], pts[1:]], axis=1)  # (N, 2, 2)
+    seg_speed = 0.5 * (sp[:-1] + sp[1:])  # colour per segment
     lc = LineCollection(segments, cmap=cmap, zorder=3)
     lc.set_array(seg_speed)
     lc.set_linewidth(3.0)
@@ -37,10 +37,17 @@ def _speed_line(ax, track, speed, cmap):
     return lc
 
 
-def draw_track(track, ax=None, title=None, speed=None,
-               band_color="#cdd6dd", edge_color="0.2",
-               center_color="tab:blue", start_color="crimson",
-               speed_cmap="viridis"):
+def draw_track(
+    track,
+    ax=None,
+    title=None,
+    speed=None,
+    band_color="#cdd6dd",
+    edge_color="0.2",
+    center_color="tab:blue",
+    start_color="crimson",
+    speed_cmap="viridis",
+):
     """Render a Track's static layout on a matplotlib axis.
 
     Draws the drivable area as a filled band between the left and right
@@ -74,8 +81,7 @@ def draw_track(track, ax=None, title=None, speed=None,
     # Centerline: plain dashed line, or a speed heatmap.
     if speed is None:
         cc = _closed(np.column_stack([track.cx, track.cy]))
-        ax.plot(cc[:, 0], cc[:, 1], "--", color=center_color, lw=1.3,
-                label="centerline")
+        ax.plot(cc[:, 0], cc[:, 1], "--", color=center_color, lw=1.3, label="centerline")
     else:
         speed = np.asarray(speed, dtype=float)
         if speed.shape[0] != len(track.cx):
@@ -85,8 +91,15 @@ def draw_track(track, ax=None, title=None, speed=None,
         cbar.set_label("reference speed [m/s]")
 
     # Start/finish point (sample 0).
-    ax.plot(track.cx[0], track.cy[0], marker="*", color=start_color,
-            markersize=16, zorder=5, label="start/finish")
+    ax.plot(
+        track.cx[0],
+        track.cy[0],
+        marker="*",
+        color=start_color,
+        markersize=16,
+        zorder=5,
+        label="start/finish",
+    )
 
     ax.set_aspect("equal", "box")
     ax.set_xlabel("x [m]")
@@ -129,21 +142,29 @@ class LiveView:
         self._anim = None
 
         # Animated artists (drawn on top of the static backdrop).
-        (self.trail_ln,) = self.ax.plot([], [], "-", color="tab:blue", lw=1.5,
-                                        alpha=0.7, zorder=4, label="path")
-        (self.horizon_ln,) = self.ax.plot([], [], "-o", color="tab:orange",
-                                          ms=3, lw=1.5, zorder=6, label="MPC horizon")
+        (self.trail_ln,) = self.ax.plot(
+            [], [], "-", color="tab:blue", lw=1.5, alpha=0.7, zorder=4, label="path"
+        )
+        (self.horizon_ln,) = self.ax.plot(
+            [], [], "-o", color="tab:orange", ms=3, lw=1.5, zorder=6, label="MPC horizon"
+        )
         (self.car_pt,) = self.ax.plot([], [], "o", color="crimson", ms=11, zorder=8)
-        (self.heading_ln,) = self.ax.plot([], [], "-", color="crimson", lw=2.5,
-                                          zorder=8)
+        (self.heading_ln,) = self.ax.plot([], [], "-", color="crimson", lw=2.5, zorder=8)
         self.hud = self.ax.text(
-            0.02, 0.98, "", transform=self.ax.transAxes, va="top", ha="left",
-            fontsize=10, family="monospace", zorder=10,
-            bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
+            0.02,
+            0.98,
+            "",
+            transform=self.ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=10,
+            family="monospace",
+            zorder=10,
+            bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85),
+        )
 
         self.ax.legend(loc="upper right", fontsize=8)
-        self._artists = [self.trail_ln, self.horizon_ln, self.car_pt,
-                         self.heading_ln, self.hud]
+        self._artists = [self.trail_ln, self.horizon_ln, self.car_pt, self.heading_ln, self.hud]
 
     def reset(self):
         """Clear the trailing path (e.g. before starting a new run)."""
@@ -166,8 +187,9 @@ class LiveView:
         theta = float(cs[3]) if cs.shape[0] >= 4 else 0.0
 
         self.car_pt.set_data([x], [y])
-        self.heading_ln.set_data([x, x + self.heading_len * np.cos(theta)],
-                                 [y, y + self.heading_len * np.sin(theta)])
+        self.heading_ln.set_data(
+            [x, x + self.heading_len * np.cos(theta)], [y, y + self.heading_len * np.sin(theta)]
+        )
 
         self._trail.append((x, y))
         tx, ty = zip(*self._trail)
@@ -187,9 +209,7 @@ class LiveView:
         info = lap_info or {}
         lap = info.get("lap", "-")
         lap_time = info.get("lap_time", float("nan"))
-        return (f"lap   : {lap}\n"
-                f"time  : {lap_time:6.2f} s\n"
-                f"speed : {speed:5.2f} m/s")
+        return f"lap   : {lap}\ntime  : {lap_time:6.2f} s\nspeed : {speed:5.2f} m/s"
 
     def _on_frame(self, frame):
         car_state, horizon, lap_info = frame
@@ -203,8 +223,15 @@ class LiveView:
         """
         self.reset()
         self._anim = FuncAnimation(
-            self.fig, self._on_frame, frames=frames, init_func=self.init_artists,
-            interval=interval, blit=blit, repeat=repeat, cache_frame_data=False)
+            self.fig,
+            self._on_frame,
+            frames=frames,
+            init_func=self.init_artists,
+            interval=interval,
+            blit=blit,
+            repeat=repeat,
+            cache_frame_data=False,
+        )
         return self._anim
 
 
