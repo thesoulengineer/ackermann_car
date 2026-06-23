@@ -183,7 +183,9 @@ class HybridMPCController(BaseController):
             if k == 0:
                 cost += cp.sum_squares(self.Rd_matrix @ (self._controls[:, 0] - self._last_command))
             else:
-                cost += cp.sum_squares(self.Rd_matrix @ (self._controls[:, k] - self._controls[:, k - 1]))
+                cost += cp.sum_squares(
+                    self.Rd_matrix @ (self._controls[:, k] - self._controls[:, k - 1])
+                )
 
             # Soft constraint slack penalties (balanced linear and quadratic elements)
             if self.enable_obstacles or self.enable_walls:
@@ -205,8 +207,10 @@ class HybridMPCController(BaseController):
                     + self._wall_normal_y[k] * self._states[1, k + 1]
                 )
                 constraints += [
-                    signed_dist <= self._wall_half_width[k] + self._wall_ref_proj[k] + self._S_var[k],
-                    -signed_dist <= self._wall_half_width[k] - self._wall_ref_proj[k] + self._S_var[k],
+                signed_dist
+                    <= self._wall_half_width[k] + self._wall_ref_proj[k] + self._S_var[k],
+                    -signed_dist
+                    <= self._wall_half_width[k] - self._wall_ref_proj[k] + self._S_var[k],
                 ]
 
         # Terminal state cost
@@ -252,7 +256,8 @@ class HybridMPCController(BaseController):
         for k in range(1, N):
             constraints += [
                 cp.abs(self._controls[0, k] - self._controls[0, k - 1]) <= self.da_max * self.dt,
-                cp.abs(self._controls[1, k] - self._controls[1, k - 1]) <= self.ddelta_max * self.dt,
+                cp.abs(self._controls[1, k] - self._controls[1, k - 1])
+                <= self.ddelta_max * self.dt,
             ]
 
         self._problem = cp.Problem(cp.Minimize(cost), constraints)
@@ -434,7 +439,9 @@ class HybridMPCController(BaseController):
         if self.enable_walls:
             self._wall_normal_x.value = wall_nx
             self._wall_normal_y.value = wall_ny
-            self._wall_half_width.value = np.ones(self.N) * max(0.0, float(half_width) - self.wall_margin)
+            self._wall_half_width.value = np.ones(self.N) * max(
+                0.0, float(half_width) - self.wall_margin
+            )
 
             # Precompute projections of the local reference path onto local normals
             ref_x = xref_ego[0, 1 : self.N + 1]
