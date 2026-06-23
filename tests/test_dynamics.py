@@ -7,6 +7,7 @@ Unit tests for the kinematic bicycle dynamics model.
 from __future__ import annotations
 
 import numpy as np
+
 from ackermann_car.sim.car import KinematicBicycleModel
 
 
