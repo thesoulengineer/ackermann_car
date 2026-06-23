@@ -20,7 +20,7 @@ sample). Angles are in radians, using the atan2 convention (measured from the
 from __future__ import annotations
 
 import numpy as np
-from scipy.interpolate import splprep, splev
+from scipy.interpolate import splev, splprep
 
 
 class Track:
@@ -42,8 +42,7 @@ class Track:
         tck                 scipy spline representation (periodic)
     """
 
-    def __init__(self, waypoints, width=10.0, ds=0.1, n_dense=20000,
-                 v_max=3.0, a_lat_max=2.0):
+    def __init__(self, waypoints, width=10.0, ds=0.1, n_dense=20000, v_max=3.0, a_lat_max=2.0):
         wp = np.asarray(waypoints, dtype=float)
         if wp.ndim != 2 or wp.shape[1] != 2:
             raise ValueError("waypoints must have shape (K, 2)")
@@ -133,7 +132,7 @@ class Track:
         """Per-sample reference speed (m/s), computed once and cached."""
         if self._v_ref is None:
             try:
-                from sim.speed_profile import speed_profile
+                from .speed_profile import speed_profile
             except ImportError:  # running as a script with sim/ on the path
                 from speed_profile import speed_profile
             self._v_ref = speed_profile(self, **self._speed_kwargs)
@@ -210,8 +209,7 @@ class Track:
             car_theta = float(car_state[3])
             theta = theta - round((theta[0] - car_theta) / (2 * np.pi)) * 2 * np.pi
 
-        return np.column_stack([self.cx[idxs], self.cy[idxs],
-                                self.v_ref[idxs], theta])
+        return np.column_stack([self.cx[idxs], self.cy[idxs], self.v_ref[idxs], theta])
 
     def get_boundary_data(self, index, N, dt=None):
         """Left-pointing unit normals (N+1, 2) over the horizon, and half_width.
@@ -224,8 +222,7 @@ class Track:
         if dt is None:
             dt = self._last_dt
         if dt is None:
-            raise ValueError(
-                "no dt available: call get_reference first or pass dt explicitly")
+            raise ValueError("no dt available: call get_reference first or pass dt explicitly")
         idxs = self._horizon_indices(index, N, dt)
         return self.normals[idxs], self.half_width
 
@@ -240,18 +237,20 @@ class Track:
     @classmethod
     def circuit(cls, width=8.0, ds=0.1):
         """A closed circuit with varying curvature (star-shaped, CCW)."""
-        wp = np.array([
-            (70.0, 0.0),
-            (55.0, 35.0),
-            (15.0, 45.0),
-            (-20.0, 35.0),
-            (-25.0, 10.0),
-            (-55.0, 5.0),
-            (-70.0, -25.0),
-            (-35.0, -45.0),
-            (10.0, -40.0),
-            (45.0, -30.0),
-        ])
+        wp = np.array(
+            [
+                (70.0, 0.0),
+                (55.0, 35.0),
+                (15.0, 45.0),
+                (-20.0, 35.0),
+                (-25.0, 10.0),
+                (-55.0, 5.0),
+                (-70.0, -25.0),
+                (-35.0, -45.0),
+                (10.0, -40.0),
+                (45.0, -30.0),
+            ]
+        )
         return cls(wp, width=width, ds=ds)
 
     @classmethod
@@ -270,30 +269,66 @@ def _plot_layout(ax, track, title):
     import numpy as np
 
     ax.plot(track.cx, track.cy, "-", color="tab:blue", lw=1.6, label="centerline")
-    ax.plot(track.left_bound[:, 0], track.left_bound[:, 1], "-",
-            color="tab:green", lw=1.0, label="left bound")
-    ax.plot(track.right_bound[:, 0], track.right_bound[:, 1], "-",
-            color="tab:red", lw=1.0, label="right bound")
-    ax.scatter(track.waypoints[:, 0], track.waypoints[:, 1],
-               color="k", s=30, zorder=5, label="waypoints")
+    ax.plot(
+        track.left_bound[:, 0],
+        track.left_bound[:, 1],
+        "-",
+        color="tab:green",
+        lw=1.0,
+        label="left bound",
+    )
+    ax.plot(
+        track.right_bound[:, 0],
+        track.right_bound[:, 1],
+        "-",
+        color="tab:red",
+        lw=1.0,
+        label="right bound",
+    )
+    ax.scatter(
+        track.waypoints[:, 0], track.waypoints[:, 1], color="k", s=30, zorder=5, label="waypoints"
+    )
 
     # Start/finish point (index 0) + heading arrow.
     extent = max(np.ptp(track.cx), np.ptp(track.cy))
     hlen = max(3.0 * track.half_width, 0.07 * extent)
-    ax.scatter([track.cx[0]], [track.cy[0]], color="magenta", s=90,
-               zorder=6, marker="o", label="start/finish")
-    ax.quiver(track.cx[0], track.cy[0],
-              np.cos(track.theta[0]) * hlen, np.sin(track.theta[0]) * hlen,
-              angles="xy", scale_units="xy", scale=1, color="magenta",
-              width=0.006, zorder=7)
+    ax.scatter(
+        [track.cx[0]],
+        [track.cy[0]],
+        color="magenta",
+        s=90,
+        zorder=6,
+        marker="o",
+        label="start/finish",
+    )
+    ax.quiver(
+        track.cx[0],
+        track.cy[0],
+        np.cos(track.theta[0]) * hlen,
+        np.sin(track.theta[0]) * hlen,
+        angles="xy",
+        scale_units="xy",
+        scale=1,
+        color="magenta",
+        width=0.006,
+        zorder=7,
+    )
 
     # A handful of left normals (length = half_width, so they reach the boundary).
     idx = np.linspace(0, len(track.cx), 12, endpoint=False).astype(int)
-    ax.quiver(track.cx[idx], track.cy[idx],
-              track.normals[idx, 0] * track.half_width,
-              track.normals[idx, 1] * track.half_width,
-              angles="xy", scale_units="xy", scale=1, color="darkorange",
-              width=0.004, zorder=4, label="left normals")
+    ax.quiver(
+        track.cx[idx],
+        track.cy[idx],
+        track.normals[idx, 0] * track.half_width,
+        track.normals[idx, 1] * track.half_width,
+        angles="xy",
+        scale_units="xy",
+        scale=1,
+        color="darkorange",
+        width=0.004,
+        zorder=4,
+        label="left normals",
+    )
 
     ax.set_title(title)
     ax.set_xlabel("x [m]")
@@ -332,15 +367,17 @@ if __name__ == "__main__":
     # wrap point (where atan2 flips +/-pi), so the heading column would jump
     # without local unwrapping.
     oval = Track.oval()
-    jw = int(np.argmax(np.abs(oval.theta)))      # sample where theta ~ +/-pi
-    j = (jw - 12) % len(oval.cx)                  # start a little before it
+    jw = int(np.argmax(np.abs(oval.theta)))  # sample where theta ~ +/-pi
+    j = (jw - 12) % len(oval.cx)  # start a little before it
     car_theta = float(oval.theta[j])
-    car_state = np.array([
-        oval.cx[j] + 0.3 * oval.normals[j, 0],   # nudge off the centerline
-        oval.cy[j] + 0.3 * oval.normals[j, 1],
-        2.0,                                      # speed (unused by lookup)
-        car_theta,
-    ])
+    car_state = np.array(
+        [
+            oval.cx[j] + 0.3 * oval.normals[j, 0],  # nudge off the centerline
+            oval.cy[j] + 0.3 * oval.normals[j, 1],
+            2.0,  # speed (unused by lookup)
+            car_theta,
+        ]
+    )
 
     N, dt = 25, 0.2
     ref = oval.get_reference(car_state, N, dt)
@@ -351,12 +388,10 @@ if __name__ == "__main__":
     print(f"  car heading        : {car_theta:+.3f} rad")
     print(f"  reference shape     : {ref.shape}   (expected ({N + 1}, 4))")
     print(f"  boundary normals    : {normals.shape}, half_width = {half_width:.2f} m")
-    print(f"  heading column (rad):")
+    print("  heading column (rad):")
     print("   ", np.array2string(ref[:, 3], precision=3, separator=", "))
-    print(f"  max |d.heading| raw wrapped (no unwrap): "
-          f"{np.abs(np.diff(wrapped)).max():.3f} rad")
-    print(f"  max |d.heading| ours (local unwrap)    : "
-          f"{np.abs(np.diff(ref[:, 3])).max():.3f} rad")
+    print(f"  max |d.heading| raw wrapped (no unwrap): {np.abs(np.diff(wrapped)).max():.3f} rad")
+    print(f"  max |d.heading| ours (local unwrap)    : {np.abs(np.diff(ref[:, 3])).max():.3f} rad")
     print()
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
