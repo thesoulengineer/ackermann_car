@@ -26,6 +26,7 @@ from ackermann_car.communication.network import ControllerServer, SimulatorClien
 from ackermann_car.controllers.hybrid_mpc import HybridMPCController
 from ackermann_car.sim.car import KinematicBicycleModel
 from ackermann_car.sim.lap_manager import LapManager
+from ackermann_car.sim.obstacles import generate_obstacles
 from ackermann_car.sim.track import Track
 from ackermann_car.sim.visualizer import LiveView
 
@@ -33,15 +34,8 @@ from ackermann_car.sim.visualizer import LiveView
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("run")
 
-# Define racetrack obstacles placed on the track
-OBSTACLES = [
-    {"x": 0.0, "y": 30.0, "r": 2.5},  # Top straight (directly blocking centerline)
-    {"x": -35.0, "y": -15.0, "r": 2.5},  # Far curve
-    {"x": -10.0, "y": 30.0, "r": 1.0},  # Top straight extra
-    {"x": -25.0, "y": 20.0, "r": 2.0},  # Turn approach
-    {"x": 15.0, "y": -28.0, "r": 1.8},  # Bottom straight
-    {"x": 25.0, "y": -20.0, "r": 2.8},  # Bottom straight turn
-]
+# Common radius for every randomly generated obstacle, metres.
+OBSTACLE_RADIUS = 2.0
 
 
 def run_simulator(host: str, port: int):
@@ -51,6 +45,8 @@ def run_simulator(host: str, port: int):
     # Incrementamos los waypoints a n=100. Esto produce una elipse analíticamente perfecta,
     # eliminando las ondulaciones de heading en el spline que arrojaban al coche hacia adentro.
     track = Track.oval(n=100, width=15.0)
+    obstacles = generate_obstacles(track, radius=OBSTACLE_RADIUS)
+    logger.info(f"Generated {len(obstacles)} obstacles (r={OBSTACLE_RADIUS} m)")
     model = KinematicBicycleModel(wheelbase=0.3)
     lap_mgr = LapManager(track)
 
@@ -80,7 +76,7 @@ def run_simulator(host: str, port: int):
                     ref=ref.tolist(),
                     normals=normals.tolist(),
                     half_width=half_width,
-                    obstacles=OBSTACLES,
+                    obstacles=obstacles,
                 )
                 action = np.array(reply["action"])
                 predicted = np.array(reply["predicted_horizon"])
@@ -115,7 +111,7 @@ def run_simulator(host: str, port: int):
     view.ax.set_title("Decoupled MPC Simulation - Dynamic Obstacle Avoidance")
 
     # Draw obstacles as red circle patches on the visualizer axis
-    for i, obs in enumerate(OBSTACLES):
+    for i, obs in enumerate(obstacles):
         circle = plt.Circle(
             (obs["x"], obs["y"]),
             obs["r"],
@@ -160,7 +156,7 @@ def run_simulator(host: str, port: int):
             from sim.visualizer import draw_track
 
             draw_track(track, ax=ax, title="Simulation Trajectory (Fallback)")
-            for obs in OBSTACLES:
+            for obs in obstacles:
                 circle = plt.Circle(
                     (obs["x"], obs["y"]), obs["r"], color="crimson", alpha=0.6, zorder=5
                 )
