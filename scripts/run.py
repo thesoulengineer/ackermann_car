@@ -50,7 +50,7 @@ def run_simulator(host: str, port: int):
     # MEJORA DE DISCRETIZACIÓN DE PISTA:
     # Incrementamos los waypoints a n=100. Esto produce una elipse analíticamente perfecta,
     # eliminando las ondulaciones de heading en el spline que arrojaban al coche hacia adentro.
-    track = Track.oval(n=100)
+    track = Track.oval(n=100, width=15.0)
     model = KinematicBicycleModel(wheelbase=0.3)
     lap_mgr = LapManager(track)
 
