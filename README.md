@@ -4,6 +4,21 @@ This repository implements a decoupled, receding-horizon Model Predictive Contro
 
 ---
 
+## Demonstrations
+
+The hybrid LTV-MPC tracking the reference line and avoiding randomly generated obstacles on each of the three built-in tracks. Each clip is a single lap, rendered headlessly by [`scripts/render_demos.py`](scripts/render_demos.py).
+
+### Oval
+![Oval track demo](docs/media/oval.gif)
+
+### Circuit
+![Circuit track demo](docs/media/circuit.gif)
+
+### Figure-Eight
+![Figure-eight track demo](docs/media/figure_eight.gif)
+
+---
+
 ## 1. System Architecture & Execution Sequence
 
 The simulation is built on a decoupled Client-Server architecture to mimic real-world deployment where control computations run on a dedicated onboard or edge computer, isolated from physical sensors/actuators.
