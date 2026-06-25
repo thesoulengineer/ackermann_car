@@ -57,6 +57,18 @@ class HybridMPCController(BaseController):
         max_iter: int = 2,
         solver: str = "OSQP",
         rho: float = SLACK_PENALTY,
+        q_diag: np.ndarray = Q_DIAG,
+        r_diag: np.ndarray = R_DIAG,
+        rd_diag: np.ndarray = RD_DIAG,
+        p_scale: float = P_SCALE,
+        da_max: float = DA_MAX,
+        ddelta_max: float = DDELTA_MAX,
+        obs_margin: float = OBSTACLE_MARGIN,
+        obstacle_activation_range: float = 8.0,
+        blend_distance: float = 10.0,
+        speed_scale_distance: float = 5.0,
+        speed_scale_radius: float = 1.2,
+        speed_scale_min: float = 0.5,
     ):
         self.N = N
         self.dt = dt
@@ -72,16 +84,22 @@ class HybridMPCController(BaseController):
         self.a_max = A_MAX
         self.a_min = A_MIN
         self.delta_max = DELTA_MAX
-        self.da_max = DA_MAX
-        self.ddelta_max = DDELTA_MAX
+        self.da_max = da_max
+        self.ddelta_max = ddelta_max
         self.wall_margin = WALL_MARGIN
-        self.obs_margin = OBSTACLE_MARGIN
+        self.obs_margin = obs_margin
+        # Obstacle-avoidance shaping knobs (tunable; defaults reproduce the original literals).
+        self.obstacle_activation_range = obstacle_activation_range
+        self.blend_distance = blend_distance
+        self.speed_scale_distance = speed_scale_distance
+        self.speed_scale_radius = speed_scale_radius
+        self.speed_scale_min = speed_scale_min
 
-        # Classic cost matrices for backward compatibility
-        self.Q = np.diag(Q_DIAG)
-        self.P = np.diag(P_DIAG)
-        self.R = np.diag(R_DIAG)
-        self.Rd = np.diag(RD_DIAG)
+        # Cost matrices (tunable via constructor; defaults reproduce the module constants).
+        self.Q = np.diag(q_diag)
+        self.P = np.diag(np.asarray(q_diag, dtype=float) * p_scale)
+        self.R = np.diag(r_diag)
+        self.Rd = np.diag(rd_diag)
 
         # Precompute square-root cost matrices for CVXPY DPP-compliance (sum_squares formulation)
         self.Q_matrix = np.sqrt(self.Q)
@@ -368,7 +386,7 @@ class HybridMPCController(BaseController):
                     closest_obs = (ox, oy, r, 0.0, 0.0)
 
             # Process closest active obstacle within horizon range (8.0 meters)
-            if closest_obs is not None and min_dist < 8.0:
+            if closest_obs is not None and min_dist < self.obstacle_activation_range:
                 gx, gy, r, vx, vy = closest_obs
                 dx_obs = gx - state[0]
                 dy_obs = gy - state[1]
@@ -402,8 +420,10 @@ class HybridMPCController(BaseController):
             ox_e, oy_e, r_e, _, _ = obstacle_ego
             dist_to_obs_edge = max(0.0, ox_e - r_e)
             # If the vehicle is close to a large roadblock, scale down reference speed
-            if dist_to_obs_edge < 5.0 and r_e > 1.2:
-                speed_scaler = np.clip(dist_to_obs_edge / 5.0, 0.5, 1.0)
+            if dist_to_obs_edge < self.speed_scale_distance and r_e > self.speed_scale_radius:
+                speed_scaler = np.clip(
+                    dist_to_obs_edge / self.speed_scale_distance, self.speed_scale_min, 1.0
+                )
                 xref_ego[2, :] *= speed_scaler
 
         # -------------------------------------------------------------------
@@ -501,7 +521,7 @@ class HybridMPCController(BaseController):
                     # KEY STRATEGY: Smooth continuous blend with the track perpendicular normal.
                     # We use a start blend distance of 10.0 meters so that the lateral steering
                     # gradient starts acting far ahead, easing steering changes significantly.
-                    d_start = 10.0
+                    d_start = self.blend_distance
                     w = np.clip(1.0 - d_long / d_start, 0.0, 1.0)
 
                     # Determine bypass side consistently based on the latched bypass memory
